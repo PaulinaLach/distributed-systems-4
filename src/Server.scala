@@ -1,7 +1,8 @@
 import java.io.File
 import java.io.PrintWriter
 
-import akka.actor.{Actor, ActorSystem, Props}
+import akka.actor.{Actor, ActorRef, ActorSystem, Props}
+import akka.util.Timeout
 import com.typesafe.config.{Config, ConfigFactory}
 
 import scala.io.Source
@@ -18,29 +19,100 @@ class Server extends App {
 }
 
 
+case class SearchedTitle(title: String, price: String)
+
 class TitleSearcherExecutor extends Actor {
+
+  var titleFound = false
+  implicit val timeout = Timeout(10 seconds)
+
   def receive = {
     case SearchTitle(title) =>
-      val result = searchTitle(title)
-      sender ! SearchedTitle(result)
+      val searchSender = sender
+      sender ! searchTitle(title, sender)
   }
-}
 
-def searchTitle(title: String): String = {
-  val db1 = io.Source.fromFile((new java.io.File(".").getCanonicalPath) + "/data/db1.txt").getLines() //TODO: fix path
-  val db2 = io.Source.fromFile((new java.io.File(".").getCanonicalPath) + "/data/db2.txt").getLines()
-  var line = db1.filter(_ contains title) // TODO: moze zawierac inny krotszy tutl -> BUG
-  try {
-    if (!(line)) {
-      line = db2.filter(_ contains title)
+  //TODO: wywalic poza klase
+  private def searchCompleted(sender: ActorRef, result: Any) = {
+    val dbActorRes: DbActorRes = result.asInstanceOf[DbActorRes]
+    //println(s"Input array: ${dbActorRes.lines.mkString(" and ")}")
+
+//    titleFound.synchronized {
+//      if (!titleFound) {
+//        if (dbActorRes.lines.length > 0) {
+//          titleFound = true
+//        }
+//        var title = String
+//        var price = String
+//        for (line <- dbActorRes.lines) {
+//          println(s"Line $line")
+//          val splitted = line.split(";")
+//          title = title :+ splitted(0)
+//          price = price :+ splitted(1)
+//        }
+//
+//        sender ! SearchedTitle(title, price)
+//      }
+//    }
+    titleFound.synchronized {
+      if (!titleFound) {
+        var title = String
+        var price = String
+        if (dbActorRes.lines.length > 0) {
+          titleFound = true
+          for (line <- dbActorRes.lines) {
+            println(s"Line $line")
+            val splitted = line.split(";")
+            title = title :+ splitted(0)
+            price = price :+ splitted(1)
+          }
+        }
+        else {
+          title = "Title not found."
+          price = "None"
+        }
+        sender ! SearchedTitle(title, price)
+      }
     }
-    return line.split(" ").lastOption
   }
-  catch Exception NotFound{
-    return "Title not found."
+}
+
+case class TSearch(title: String)
+
+def searchTitle(title: String, sender: ActorRef) = {
+  import context.dispatcher
+
+  val db1 = context.actorOf(Props(classOf[DbActor], "db1.txt"))
+  val db2 = context.actorOf(Props(classOf[DbActor], "db2.txt"))
+
+  val db1Future = db1 ? TSearch(title)
+  val db2Future = db2 ? TSearch(title)
+
+  db1Future.onComplete {
+    case Success(result) => searchCompleted(sender, result)
+    case Failure(result) => searchCompleted(sender, result)
   }
 
+  db2Future.onComplete {
+    case Success(result) => searchCompleted(sender, result)
+    case Failure(result) => searchCompleted(sender, result)
+  }
 }
+
+case class DbActorRes(lines: Array[String])
+
+class DbActor(file: String) extends Actor  {
+  override def receive: Receive = {
+    case TSearch(title) => {
+      val lines = fromFile(file).getLines
+      sender ! DbActorRes(lines.filter((s: String) => s.contains(title)).toArray)
+    }
+  }
+}
+
+
+
+
 
 
 
@@ -84,6 +156,6 @@ class TitleStreamerExecutor extends Actor {
 }
 
 
-case class SearchedTitle(title: String)
+
 case class OrderedTitle(title: String)
 case class StreamedTitle(title: String)

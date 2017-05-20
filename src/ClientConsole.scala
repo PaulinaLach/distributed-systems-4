@@ -67,7 +67,7 @@ class ClientConsole extends App {
 
 class TitleSearcher extends Actor {
   override def receive: Receive = {
-    case SearchedTitle(title) => println(title)
+    case SearchedTitle(title, price) => println(title + ", " + price)
   }
 }
 

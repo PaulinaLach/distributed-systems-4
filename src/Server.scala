@@ -1,28 +1,37 @@
-import akka.stream._
-import akka.stream.scaladsl._
-
 import java.io.File
 import java.io.PrintWriter
+
+import akka.actor.{Actor, ActorSystem, Props}
+import com.typesafe.config.{Config, ConfigFactory}
 
 import scala.io.Source
 
 
+class Server extends App {
+  val config: Config = ConfigFactory.load("server.conf")
+  val system = ActorSystem("server", config.getConfig("server").withFallback(config))
+
+  val synchroOrders = new SynchroOrders()
+  val titleSearcherExecutor = system.actorOf(Props(classOf[TitleSearcherExecutor]), "titleSearcherExecutor")
+  val titleOrdererExecutor = system.actorOf(Props(classOf[TitleOrdererExecutor], synchroOrders), "titleOrdererExecutor")
+  val titleStreamerExecutor = system.actorOf(Props(classOf[TitleStreamerExecutor]), "titleStreamerExecutor")
+}
+
+
 class TitleSearcherExecutor extends Actor {
-
   def receive = {
-    case searchTitle(title) =>
+    case SearchTitle(title) =>
       val result = searchTitle(title)
-      sender ! result
-
+      sender ! SearchedTitle(result)
   }
 }
 
 def searchTitle(title: String): String = {
-  val db1 = io.Source.fromFile((new java.io.File(".").getCanonicalPath) + "/data/db1.txt").getLines()
+  val db1 = io.Source.fromFile((new java.io.File(".").getCanonicalPath) + "/data/db1.txt").getLines() //TODO: fix path
   val db2 = io.Source.fromFile((new java.io.File(".").getCanonicalPath) + "/data/db2.txt").getLines()
-  var line = db1.filter(_ contains title) // moze zawierac inny krotszy tutl -> BUG
+  var line = db1.filter(_ contains title) // TODO: moze zawierac inny krotszy tutl -> BUG
   try {
-    if (! line) {
+    if (!(line)) {
       line = db2.filter(_ contains title)
     }
     return line.split(" ").lastOption
@@ -33,36 +42,48 @@ def searchTitle(title: String): String = {
 
 }
 
-class OrderExecutor extends Actor {
 
+
+
+class TitleOrdererExecutor(synchroOrders: SynchroOrders) extends Actor {
   def receive = {
-    case order(title) =>
-      orderBook(title)
+    case OrderTitle(title) =>
+      synchroOrders.orderTitle(title)
       val result = "Book ordered for client " + sender
-      sender ! result
+      sender ! OrderedTitle(result)
 
   }
 }
 
-def order(title: String): String = {
-  val output = new PrintWriter(new File((new java.io.File(".").getCanonicalPath) + "/data/orders.txt"))
-  output.write(title)
-  output.close()
-
+class SynchroOrders {
+  def orderTitle(title: String) = {
+    this.synchronized {
+      val output = new PrintWriter(new File((new java.io.File(".").getCanonicalPath) + "/data/orders.txt")) //TODO: fix path
+      output.write(title)
+      output.close()
+    }
+  }
 }
 
-class StreamTextExecutor extends Actor {
 
+
+
+class TitleStreamerExecutor extends Actor {
   def receive = {
     // TODO: dodac obsluge wyjatku not found
-    case stream(title) =>
+    case StreamTitle(title) =>
       val source = io.Source.fromFile((new java.io.File(".").getCanonicalPath) + "/data/lorem.txt").getLines()
-      for (line <- source.getLines()) {
+      for (line <- source) {
         sender ! line
         // TODO: sleep dodac
       }
       val result = stream(title)
-      sender ! result
+      sender ! StreamedTitle(result)
   }
 
 }
+
+
+case class SearchedTitle(title: String)
+case class OrderedTitle(title: String)
+case class StreamedTitle(title: String)

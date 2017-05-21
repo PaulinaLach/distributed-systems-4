@@ -1,14 +1,17 @@
 import java.io.File
 import java.io.PrintWriter
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Props}
+import akka.actor.{Actor, ActorContext, ActorRef, ActorSystem, Props}
 import akka.util.Timeout
+import akka.pattern.ask
 import com.typesafe.config.{Config, ConfigFactory}
 
 import scala.io.Source
+import scala.util.{Failure, Success}
+import scala.concurrent.duration._
 
 
-class Server extends App {
+object Server extends App {
   val config: Config = ConfigFactory.load("server.conf")
   val system = ActorSystem("server", config.getConfig("server").withFallback(config))
 
@@ -29,10 +32,30 @@ class TitleSearcherExecutor extends Actor {
   def receive = {
     case SearchTitle(title) =>
       val searchSender = sender
-      sender ! searchTitle(title, sender)
+      sender ! searchTitle(context, title, sender)
   }
 
-  //TODO: wywalic poza klase
+  def searchTitle(context: ActorContext, title: String, sender: ActorRef) = {
+    import context.dispatcher
+
+    val db1 = context.actorOf(Props(classOf[DbActor], "db1.txt"))
+    val db2 = context.actorOf(Props(classOf[DbActor], "db2.txt"))
+
+    val db1Future = db1 ? TSearch(title)
+    val db2Future = db2 ? TSearch(title)
+
+    db1Future.onComplete {
+      case Success(result) => searchCompleted(sender, result)
+      case Failure(result) => searchCompleted(sender, result)
+    }
+
+    db2Future.onComplete {
+      case Success(result) => searchCompleted(sender, result)
+      case Failure(result) => searchCompleted(sender, result)
+    }
+  }
+
+
   private def searchCompleted(sender: ActorRef, result: Any) = {
     val dbActorRes: DbActorRes = result.asInstanceOf[DbActorRes]
     //println(s"Input array: ${dbActorRes.lines.mkString(" and ")}")
@@ -56,16 +79,14 @@ class TitleSearcherExecutor extends Actor {
 //    }
     titleFound.synchronized {
       if (!titleFound) {
-        var title = String
-        var price = String
-        if (dbActorRes.lines.length > 0) {
+        var title : String = ""
+        var price : String = ""
+        if (dbActorRes.line != null) {
           titleFound = true
-          for (line <- dbActorRes.lines) {
-            println(s"Line $line")
-            val splitted = line.split(";")
-            title = title :+ splitted(0)
-            price = price :+ splitted(1)
-          }
+          println(s"Line ${dbActorRes.line}")
+          val splitted = dbActorRes.line.split(";")
+          title = splitted(0)
+          price = splitted(1)
         }
         else {
           title = "Title not found."
@@ -79,34 +100,14 @@ class TitleSearcherExecutor extends Actor {
 
 case class TSearch(title: String)
 
-def searchTitle(title: String, sender: ActorRef) = {
-  import context.dispatcher
 
-  val db1 = context.actorOf(Props(classOf[DbActor], "db1.txt"))
-  val db2 = context.actorOf(Props(classOf[DbActor], "db2.txt"))
-
-  val db1Future = db1 ? TSearch(title)
-  val db2Future = db2 ? TSearch(title)
-
-  db1Future.onComplete {
-    case Success(result) => searchCompleted(sender, result)
-    case Failure(result) => searchCompleted(sender, result)
-  }
-
-  db2Future.onComplete {
-    case Success(result) => searchCompleted(sender, result)
-    case Failure(result) => searchCompleted(sender, result)
-  }
-}
-
-case class DbActorRes(lines: Array[String])
+case class DbActorRes(line: String)
 
 class DbActor(file: String) extends Actor  {
   override def receive: Receive = {
-    case TSearch(title) => {
-      val lines = fromFile(file).getLines
-      sender ! DbActorRes(lines.filter((s: String) => s.contains(title)).toArray)
-    }
+    case TSearch(title) =>
+      val lines = Source.fromFile(file).getLines
+      sender ! DbActorRes(lines.find((s: String) => s.contains(title)).get)
   }
 }
 
@@ -149,8 +150,8 @@ class TitleStreamerExecutor extends Actor {
         sender ! line
         // TODO: sleep dodac
       }
-      val result = stream(title)
-      sender ! StreamedTitle(result)
+//      val result = stream(title)
+//      sender ! StreamedTitle(result)
   }
 
 }

@@ -5,18 +5,18 @@ import com.typesafe.config.{Config, ConfigFactory}
   * Created by paulina on 5/20/17.
   */
 
-class ClientConsole extends App {
+object ClientConsole extends App {
 
-  val config: Config = ConfigFactory.load("client.conf")
+  val config: Config = ConfigFactory.load("resources/client.conf")
   val system = ActorSystem("client", config.getConfig("client").withFallback(config))
 
   val titleSearcher = system.actorOf(Props(classOf[TitleSearcher]), "titleSearcher")
   val titleOrderer = system.actorOf(Props(classOf[TitleOrderer]), "titleOrderer")
   val titleStreamer = system.actorOf(Props(classOf[TitleStreamer]), "titleStreamer")
 
-  val titleSearcherExecutor = system.actorSelection("akka.tcp://server@172.0.0.1:3552/user/titleSearcherExecutor")
-  val titleOrdererExecutor = system.actorSelection("akka.tcp://server@172.0.0.1:3552/user/titleOrdererExecutor")
-  val titleStreamerExecutor = system.actorSelection("akka.tcp://server@172.0.0.1:3552/user/titleStreamerExecutor")
+  val titleSearcherExecutor = system.actorSelection("akka.tcp://server@127.0.0.1:3552/user/titleSearcherExecutor")
+  val titleOrdererExecutor = system.actorSelection("akka.tcp://server@127.0.0.1:3552/user/titleOrdererExecutor")
+  val titleStreamerExecutor = system.actorSelection("akka.tcp://server@127.0.0.1:3552/user/titleStreamerExecutor")
 
   while (true) {
     try {

@@ -1,18 +1,20 @@
-import java.io.File
-import java.io.PrintWriter
+import java.io.{File, FileWriter, PrintWriter}
 
+import akka.NotUsed
 import akka.actor.{Actor, ActorContext, ActorRef, ActorSystem, Props}
 import akka.util.Timeout
 import akka.pattern.ask
+import akka.stream.scaladsl.{Sink, Source}
+import akka.stream.{ActorMaterializer, OverflowStrategy, ThrottleMode}
 import com.typesafe.config.{Config, ConfigFactory}
 
-import scala.io.Source
+import scala.io.Source.fromFile
 import scala.util.{Failure, Success}
 import scala.concurrent.duration._
 
 
 object Server extends App {
-  val config: Config = ConfigFactory.load("server.conf")
+  val config: Config = ConfigFactory.load("resources/server.conf")
   val system = ActorSystem("server", config.getConfig("server").withFallback(config))
 
   val synchroOrders = new SynchroOrders()
@@ -31,6 +33,7 @@ class TitleSearcherExecutor extends Actor {
 
   def receive = {
     case SearchTitle(title) =>
+      titleFound = false
       val searchSender = sender
       sender ! searchTitle(context, title, sender)
   }
@@ -38,8 +41,8 @@ class TitleSearcherExecutor extends Actor {
   def searchTitle(context: ActorContext, title: String, sender: ActorRef) = {
     import context.dispatcher
 
-    val db1 = context.actorOf(Props(classOf[DbActor], "db1.txt"))
-    val db2 = context.actorOf(Props(classOf[DbActor], "db2.txt"))
+    val db1 = context.actorOf(Props(classOf[DbActor], "src/data/db1.txt"))
+    val db2 = context.actorOf(Props(classOf[DbActor], "src/data/db2.txt"))
 
     val db1Future = db1 ? TSearch(title)
     val db2Future = db2 ? TSearch(title)
@@ -79,20 +82,13 @@ class TitleSearcherExecutor extends Actor {
 //    }
     titleFound.synchronized {
       if (!titleFound) {
-        var title : String = ""
-        var price : String = ""
         if (dbActorRes.line != null) {
           titleFound = true
-          println(s"Line ${dbActorRes.line}")
-          val splitted = dbActorRes.line.split(";")
-          title = splitted(0)
-          price = splitted(1)
+          val splitted = dbActorRes.line.split(" ")
+          val title = splitted(0)
+          val price = splitted(1)
+          sender ! SearchedTitle(title, price)
         }
-        else {
-          title = "Title not found."
-          price = "None"
-        }
-        sender ! SearchedTitle(title, price)
       }
     }
   }
@@ -106,8 +102,15 @@ case class DbActorRes(line: String)
 class DbActor(file: String) extends Actor  {
   override def receive: Receive = {
     case TSearch(title) =>
-      val lines = Source.fromFile(file).getLines
-      sender ! DbActorRes(lines.find((s: String) => s.contains(title)).get)
+      val record = fromFile(file).getLines.find((s: String) => s.contains(title))
+      if (record.isEmpty) {
+        var title = "TitleNoFound"
+        var price = "None"
+        sender ! DbActorRes(title + " " + price)
+      } else {
+        sender ! DbActorRes(record.get)
+      }
+
   }
 }
 
@@ -116,7 +119,7 @@ class DbActor(file: String) extends Actor  {
 
 
 
-
+case class OrderedTitle(title: String)
 
 class TitleOrdererExecutor(synchroOrders: SynchroOrders) extends Actor {
   def receive = {
@@ -131,9 +134,11 @@ class TitleOrdererExecutor(synchroOrders: SynchroOrders) extends Actor {
 class SynchroOrders {
   def orderTitle(title: String) = {
     this.synchronized {
-      val output = new PrintWriter(new File((new java.io.File(".").getCanonicalPath) + "/data/orders.txt")) //TODO: fix path
-      output.write(title)
-      output.close()
+      val output = new FileWriter("src/data/orders.txt", true)
+      try {
+        output.write(title + "\n")
+      }
+      finally output.close()
     }
   }
 }
@@ -141,22 +146,27 @@ class SynchroOrders {
 
 
 
+case class StreamedTitle(title: String)
+
 class TitleStreamerExecutor extends Actor {
   def receive = {
-    // TODO: dodac obsluge wyjatku not found
-    case StreamTitle(title) =>
-      val source = io.Source.fromFile((new java.io.File(".").getCanonicalPath) + "/data/lorem.txt").getLines()
-      for (line <- source) {
-        sender ! line
-        // TODO: sleep dodac
-      }
-//      val result = stream(title)
-//      sender ! StreamedTitle(result)
-  }
 
+    case StreamTitle(title) =>
+      val materializer = ActorMaterializer.create(context)
+      val sink = Source.actorRef(1000, OverflowStrategy.dropNew)
+        .throttle(1, 1 second, 1, ThrottleMode.shaping)
+        .to(Sink.actorRef(sender, NotUsed))
+        .run()(materializer)
+      try {
+        val lines = fromFile("src/data/" + title + ".txt").getLines
+        lines.foreach((line: String) => sink ! StreamedTitle(line))
+      }
+      catch {
+        case e: Exception => sink ! StreamedTitle("Title not found.")
+      }
+  }
 }
 
 
 
-case class OrderedTitle(title: String)
-case class StreamedTitle(title: String)
+
